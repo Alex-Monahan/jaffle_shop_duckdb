@@ -1,13 +1,20 @@
 /*
-This function is used to sort a table in chunks when sorting all at once would take too much memory.
+This macro is used to sort a table in chunks when sorting all at once would take too much memory.
 It will query the unsorted table (input_ref) once per partition, using a where clause to filter to that partition.
 It will then sort that partition of data and insert into (output_ref). 
-Note: this will only work if the config preserve_insertion_order = true. This is already the default on MotherDuck!
-(https://duckdb.org/docs/stable/configuration/overview.html)
+
+Note: Since this scans the input data once per partition, the recommendation is to use the fewest number
+      of partitions needed for the sort to fit in memory / disk.
+      It may be faster to partition so that the sort fits in memory alone - it depends!
+
+Note: This will only work if the config preserve_insertion_order = true. 
+      This is already the default on MotherDuck!
+      (https://duckdb.org/docs/stable/configuration/overview.html)
 
 To use this, 3 models are required:
 * input_ref (unsorted table)
     * Typical / pre-existing logic for building the large table
+    * Recommend to rename to a new name like old_name_unsorted
     * materialized as table
 
 * output_ref (sorted table)
@@ -17,19 +24,19 @@ To use this, 3 models are required:
 * model that the remainder of the DAG will depend on
     * Calls sort_in_chunks in a pre-hook
     * select * from {{ output_ref }}
+    * Recommended to use the original old_name (so it fits into the DAG nicely)
     * materialized as view
-    * depends on input_ref and output_ref
+    * Comments to indicate that it depends on input_ref and output_ref
 
-Example of calling this function:
-FROM sort_in_chunks(
-    'orders_unsorted',
-    'orders_sorted',
-    {'status': 'desc', 'order_date': 'desc'},
-    {'customer_id': 'desc', 'order_id': 'asc'}
-);
+Example of calling this macro:
+pre_hook= "{{ sort_in_chunks(
+    'table_unsorted',
+    'table_sorted',
+    {'partition_col_1': 'desc', 'partition_col_2': 'desc'},
+    {'order_by_col_1': 'desc', 'order_by_col_2': 'asc'}
+) }}"
 
-Test with: dbt run-operation sort_in_chunks --args '{'orders_unsorted', 'orders_sorted', {'status': 'desc', 'order_date': 'desc'}, {'customer_id': 'desc', 'order_id': 'asc'}, 'dry_run': True}'
-to run the job, run with dry_run set to false or omitted
+Include dry_run set to true to log out the queries that would be run in the insert loop.
 
 */
 
