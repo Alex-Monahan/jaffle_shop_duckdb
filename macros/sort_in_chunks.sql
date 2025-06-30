@@ -8,18 +8,21 @@ Note: Since this scans the input data once per partition, the recommendation is 
       It may be faster to partition so that the sort fits in memory alone - it depends!
 
 Note: This will only work if the config preserve_insertion_order = true. 
-      This is already the default on MotherDuck!
+      This is already the default on MotherDuck.
       (https://duckdb.org/docs/stable/configuration/overview.html)
 
 To use this, 3 models are required:
 * input_ref (unsorted table)
     * Typical / pre-existing logic for building the large table
-    * Recommend to rename to a new name like old_name_unsorted
-    * materialized as table
+    * Recommended to rename to a new name like old_name_unsorted
+    * materialized as table ?
 
 * output_ref (sorted table)
-    * select * from {{ input_ref }} limit 0
-    * materialized as table
+    * select * from {{ input_ref }}
+    * materialized as view
+    * NOTE: This will be converted to a table in this macro.
+            It is included to prevent external / read queries from failing while the job runs
+            and as a placeholder for dbt to understand lineage.
 
 * model that the remainder of the DAG will depend on
     * Calls sort_in_chunks in a pre-hook
@@ -38,18 +41,22 @@ pre_hook= "{{ sort_in_chunks(
 
 Include dry_run set to true to log out the queries that would be run in the insert loop.
 
+
+TODO: Convert SELECT * into the star expansion macro from dbt (so the logging includes all columns)
+            {{ dbt_utils.star(ref('my_model')) }}
+
 */
 
 {% macro sort_in_chunks(input_ref, output_ref, partition_columns_dict, order_columns_dict, dry_run='false') %}
     {%- if execute -%}
         {%- do log("Preparing to get partitions for: sort_in_chunks" , info=True) -%}
         {% set sql_statement %}
-        FROM {{ ref(input_ref) }} 
         SELECT DISTINCT 
             {% for partition_column, asc_desc in partition_columns_dict.items() %}
                 {{ partition_column }}
                 {%- if not loop.last  -%}, {%- endif -%}
             {% endfor %}
+        FROM {{ ref(input_ref) }} 
         ORDER BY 
             {% for partition_column, asc_desc in partition_columns_dict.items() %}
                 {{ partition_column }} {{ asc_desc }}
@@ -61,16 +68,28 @@ Include dry_run set to true to log out the queries that would be run in the inse
         {%- do log("Getting partitions for: sort_in_chunks" , info=True) -%}
         {%- set target = run_query(sql_statement) -%}
 
+        {%- do log("Convert placeholder view of input_ref into a table" , info=True) -%}
+        {% set view_to_table %}
+            DROP VIEW IF EXISTS {{ ref(output_ref) }};
+            CREATE OR REPLACE TABLE {{ ref(output_ref) }} AS 
+                SELECT {{ dbt_utils.star(ref(input_ref)) }}
+                FROM {{ ref(input_ref) }} 
+                LIMIT 0;
+        {% endset %}
+        {% do log(view_to_table) %}
+
+        {% if dry_run == 'false' %} {% do run_query(view_to_table) %} {% endif %}
+
         {%- do log("Looping over each partition, sorting within partition, and inserting to output_ref." , info=True) -%}
         {% for i in target.rows -%}
             {% set copy_target %}
             INSERT INTO {{ ref(output_ref) }}
+            SELECT {{ dbt_utils.star(ref(input_ref)) }}
             FROM {{ ref(input_ref) }}
             WHERE 1=1
                 {% for partition_column, asc_desc in partition_columns_dict.items() %}
-                    AND {{ partition_column }} = '{{ i[loop.index - 1] | replace("'", "''") }}' 
-                {% endfor %}
-                
+                    AND {{ partition_column }} = '{{ i[loop.index - 1] | replace("'", "''") }}' -- to fix syntax highlighting:" 
+                {% endfor %}      
             ORDER BY 
                 {% for order_column, asc_desc in order_columns_dict.items() %}
                     {{ order_column }} {{ asc_desc }}
