@@ -1,7 +1,11 @@
 jaffle_shop:
 
-  target: dev
+  target: prod
   outputs:
+    prod:
+      type: duckdb
+      path: 'md:flight_jaffle_shop'
+      threads: 4
     dev:
       type: duckdb
       path: 'jaffle_shop.duckdb'
